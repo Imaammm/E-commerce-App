@@ -265,7 +265,7 @@ export function ProductCatalog({
                       
                       <PaginationItem>
                         <PaginationNext
-                          size="sm"
+                          size="sm" 
                           onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
                           className={currentPage === totalPages ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
                         />

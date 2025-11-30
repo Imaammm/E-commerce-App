@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Eye, EyeOff, Shield, ArrowLeft } from 'lucide-react';
-import { toast } from 'sonner@2.0.3';
+import { toast } from 'sonner';
 
 interface AdminLoginProps {
   onLoginSuccess: (adminUser: { id: string; name: string; email: string }) => void;

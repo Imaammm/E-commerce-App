@@ -1,191 +1,155 @@
-import { useState, useEffect } from 'react';
-import { ArrowLeft, Shield, Mail } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { ArrowLeft, Shield, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
+import { auth } from '../firebase'; 
+import { RecaptchaVerifier, signInWithPhoneNumber, ConfirmationResult } from 'firebase/auth';
 
 interface OTPVerificationProps {
-  email: string;
-  isLogin: boolean;
-  onVerifySuccess: () => void;
+  phoneNumber: string;
+  onVerifySuccess: (user: any) => void;
   onBackToAuth: () => void;
 }
 
-export function OTPVerification({ email, isLogin, onVerifySuccess, onBackToAuth }: OTPVerificationProps) {
-  const [otp, setOtp] = useState(['', '', '', '', '', '']);
-  const [timeLeft, setTimeLeft] = useState(294); // 4:54 as shown in design
-  const [isResending, setIsResending] = useState(false);
+declare global {
+  interface Window {
+    recaptchaVerifier: any;
+  }
+}
 
-  // Timer countdown
+// Menggunakan 'export function' standar untuk menghindari error tipe data
+export function OTPVerification({ phoneNumber, onVerifySuccess, onBackToAuth }: OTPVerificationProps) {
+  // --- STATE ---
+  const [otp, setOtp] = useState<string[]>(['', '', '', '', '', '']);
+  const [status, setStatus] = useState('MEMUAT...'); 
+  const [errorMsg, setErrorMsg] = useState(''); 
+  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
+  
+  const recaptchaMounted = useRef(false);
+
+  // --- EFFECT: SETUP RECAPTCHA ---
   useEffect(() => {
-    if (timeLeft > 0) {
-      const timer = setTimeout(() => setTimeLeft(timeLeft - 1), 1000);
-      return () => clearTimeout(timer);
+    if (recaptchaMounted.current) return;
+    recaptchaMounted.current = true;
+
+    const initFirebase = async () => {
+      setStatus('MENYIAPKAN...');
+      try {
+        if (window.recaptchaVerifier) {
+          try { window.recaptchaVerifier.clear(); } catch(e) {}
+        }
+        
+        window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+          'size': 'invisible',
+          'callback': () => console.log("Recaptcha OK")
+        });
+
+        // Langsung kirim OTP setelah setup selesai
+        await sendOTP();
+      } catch (err: any) {
+        console.error(err);
+        setStatus('ERROR SETUP');
+        setErrorMsg(err.message || 'Gagal inisialisasi');
+      }
+    };
+
+    initFirebase();
+  }, []);
+
+  // --- FUNGSI: KIRIM OTP ---
+  const sendOTP = async () => {
+    setStatus('MENGIRIM OTP...');
+    setErrorMsg('');
+    try {
+      if (!window.recaptchaVerifier) throw new Error("Recaptcha belum siap");
+      
+      const confirmation = await signInWithPhoneNumber(auth, phoneNumber, window.recaptchaVerifier);
+      setConfirmationResult(confirmation);
+      setStatus('OTP TERKIRIM');
+      toast.success('Kode OTP Terkirim!');
+    } catch (err: any) {
+      console.error(err);
+      setStatus('GAGAL KIRIM');
+      setErrorMsg(err.message || 'Gagal mengirim SMS');
     }
-  }, [timeLeft]);
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const handleOtpChange = (index: number, value: string) => {
-    if (value.length > 1) return;
-    if (!/^\d*$/.test(value)) return; // Only allow numbers
-    
-    const newOtp = [...otp];
-    newOtp[index] = value;
-    setOtp(newOtp);
-
-    // Auto-focus next input
-    if (value && index < 5) {
-      const nextInput = document.getElementById(`otp-${index + 1}`);
-      nextInput?.focus();
-    }
-  };
-
-  const handleKeyDown = (index: number, e: React.KeyboardEvent) => {
-    if (e.key === 'Backspace' && !otp[index] && index > 0) {
-      const prevInput = document.getElementById(`otp-${index - 1}`);
-      prevInput?.focus();
-    }
-  };
-
-  const handlePaste = (e: React.ClipboardEvent) => {
-    e.preventDefault();
-    const pasteData = e.clipboardData.getData('text').slice(0, 6);
-    if (!/^\d+$/.test(pasteData)) return;
-
-    const newOtp = pasteData.split('').concat(Array(6 - pasteData.length).fill(''));
-    setOtp(newOtp.slice(0, 6));
-    
-    // Focus last filled input
-    const lastFilledIndex = Math.min(pasteData.length, 5);
-    const lastInput = document.getElementById(`otp-${lastFilledIndex}`);
-    lastInput?.focus();
-  };
-
+  // --- FUNGSI: VERIFIKASI ---
   const handleVerify = async () => {
     const otpCode = otp.join('');
-    if (otpCode.length !== 6) {
-      toast.error('Masukkan kode OTP 6 digit');
+    if (otpCode.length < 6) {
+      toast.warning("Kode harus 6 digit!");
+      return;
+    }
+    if (!confirmationResult) {
+      toast.error("Tunggu sampai OTP terkirim dulu.");
       return;
     }
 
-    // Simulate OTP verification
-    if (otpCode === '123456') {
-      toast.success('Verifikasi berhasil!');
-      onVerifySuccess();
-    } else {
-      toast.error('Kode OTP salah. Coba lagi.');
+    setStatus('MEMVERIFIKASI...');
+    try {
+      const result = await confirmationResult.confirm(otpCode);
+      setStatus('SUKSES!');
+      toast.success('Login Berhasil');
+      onVerifySuccess(result.user);
+    } catch (err: any) {
+      console.error(err);
+      setStatus('GAGAL VERIFIKASI');
+      setErrorMsg('Kode Salah');
+      toast.error('Kode OTP Salah!');
     }
   };
 
-  const handleResendOTP = async () => {
-    setIsResending(true);
-    
-    // Simulate sending OTP
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    setTimeLeft(294);
-    setOtp(['', '', '', '', '', '']);
-    setIsResending(false);
-    toast.success('Kode OTP baru telah dikirim');
+  const handleOtpChange = (index: number, value: string) => {
+    if (!/^\d*$/.test(value)) return;
+    const newOtp = [...otp];
+    newOtp[index] = value;
+    setOtp(newOtp);
+    if (value && index < 5) document.getElementById('otp-${index + 1}')?.focus();
   };
 
-  const isOtpComplete = otp.every(digit => digit !== '');
-
+  // --- RETURN JSX ---
   return (
-    <div className="min-h-screen bg-white flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-white rounded-lg p-8">
-        {/* Back Button */}
-        <button
-          onClick={onBackToAuth}
-          className="mb-8 w-8 h-8 flex items-center justify-center hover:bg-gray-100 rounded transition-colors"
-        >
-          <ArrowLeft className="h-5 w-5" />
-        </button>
+    <div className="flex flex-col items-center justify-center p-6 bg-white w-full h-full min-h-[400px]">
+      <div id="recaptcha-container"></div>
 
-        {/* Shield Icon */}
-        <div className="flex justify-center mb-6">
-          <div className="w-20 h-20 bg-[#ececf0] rounded-full flex items-center justify-center">
-            <Shield className="w-10 h-10 text-neutral-950" strokeWidth={2} />
-          </div>
-        </div>
+      <button onClick={onBackToAuth} className="self-start mb-4 p-2 hover:bg-gray-100 rounded">
+        <ArrowLeft className="w-6 h-6" />
+      </button>
 
-        {/* Title */}
-        <h1 className="text-2xl font-bold text-center text-neutral-950 mb-4">
-          Verifikasi OTP
-        </h1>
+      <Shield className="w-16 h-16 text-black mb-4" />
+      
+      <h2 className="text-2xl font-bold mb-2">Verifikasi OTP</h2>
+      <p className="text-gray-500 mb-6 text-center">Dikirim ke: <b>{phoneNumber}</b></p>
 
-        {/* Description */}
-        <p className="text-center text-[#717182] mb-4">
-          Masukkan kode 6 digit yang telah dikirim ke
-        </p>
-
-        {/* Email */}
-        <div className="flex items-center justify-center gap-2 mb-8">
-          <Mail className="w-4 h-4 text-[#717182]" />
-          <span className="text-sm text-neutral-950">{email}</span>
-        </div>
-
-        {/* OTP Input Boxes */}
-        <div className="flex justify-center gap-3 mb-6">
-          {otp.map((digit, index) => (
-            <input
-              key={index}
-              id={`otp-${index}`}
-              type="text"
-              value={digit}
-              onChange={(e) => handleOtpChange(index, e.target.value)}
-              onKeyDown={(e) => handleKeyDown(index, e)}
-              onPaste={index === 0 ? handlePaste : undefined}
-              className="w-14 h-14 text-center text-xl font-medium bg-[#ececf0] border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#030213]/30"
-              maxLength={1}
-              inputMode="numeric"
-            />
-          ))}
-        </div>
-
-        {/* Timer */}
-        <p className="text-center text-sm text-[#717182] mb-6">
-          Kode akan kedaluwarsa dalam{' '}
-          <span className="text-red-600 font-medium">{formatTime(timeLeft)}</span>
-        </p>
-
-        {/* Verify Button */}
-        <button
-          onClick={handleVerify}
-          disabled={!isOtpComplete}
-          className={`w-full rounded-lg h-[48px] text-sm transition-colors mb-4 ${
-            isOtpComplete
-              ? 'bg-[#030213] text-white hover:bg-[#030213]/90'
-              : 'bg-[#717182] text-white cursor-not-allowed'
-          }`}
-        >
-          Verifikasi
-        </button>
-
-        {/* Resend Link */}
-        <div className="text-center mb-6">
-          <p className="text-sm text-[#717182]">
-            Tidak menerima kode?{' '}
-            <button
-              onClick={handleResendOTP}
-              disabled={isResending}
-              className="text-neutral-950 underline hover:no-underline font-medium disabled:opacity-50"
-            >
-              {isResending ? 'Mengirim...' : 'Kirim ulang'}
-            </button>
-          </p>
-        </div>
-
-        {/* Info Box */}
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <p className="text-xs text-blue-700 text-center">
-            <strong>Info</strong> Kode OTP dikirim melalui SMS/Email. Periksa pesan masuk Anda.
-          </p>
-        </div>
+      {/* Debug Status Box */}
+      <div className="bg-gray-100 p-2 rounded text-xs w-full mb-6 text-center border">
+        <p className="font-bold text-blue-600">STATUS: {status}</p>
+        {errorMsg && <p className="text-red-600 mt-1 font-bold">{errorMsg}</p>}
       </div>
+
+      <div className="flex gap-2 mb-8 justify-center">
+        {otp.map((d, i) => (
+          <input
+            key={i}
+            id={'otp-${i}'}
+            value={d}
+            onChange={(e) => handleOtpChange(i, e.target.value)}
+            className="w-10 h-12 border-2 border-gray-300 rounded text-center text-xl focus:border-black outline-none"
+            maxLength={1}
+          />
+        ))}
+      </div>
+
+      <button 
+        onClick={handleVerify}
+        className="w-full bg-black text-white py-3 rounded-lg font-bold hover:bg-gray-900 transition mb-4"
+      >
+        Verifikasi Sekarang
+      </button>
+
+      <button onClick={sendOTP} className="text-sm underline flex items-center gap-2 justify-center w-full">
+        <RefreshCw className="w-3 h-3" /> Kirim Ulang Kode
+      </button>
     </div>
   );
 }
